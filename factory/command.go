@@ -902,7 +902,7 @@ func commandSync() {
 func commandInit() {
 	AmfConfig = Config{}
 	AmfConfig.Info = &Info{
-		Version:     "1.0.1",
+		Version:     "1.0.2",
 		Description: "Config from configuration manager",
 	}
 	AmfConfig.Configuration = &Configuration{}
