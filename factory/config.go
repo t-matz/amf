@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	AMF_EXPECTED_CONFIG_VERSION = "1.0.1"
+	AMF_EXPECTED_CONFIG_VERSION = "1.0.2"
 )
 
 type Config struct {
@@ -54,6 +54,7 @@ type Configuration struct {
 	T3550                           TimerValue                `yaml:"t3550"`
 	T3560                           TimerValue                `yaml:"t3560"`
 	T3565                           TimerValue                `yaml:"t3565"`
+	Locality                        string                    `yaml:"locality,omitempty"`
 }
 
 func (c *Configuration) Get5gsNwFeatSuppEnable() bool {

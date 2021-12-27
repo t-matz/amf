@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"reflect"
 	"regexp"
 	"sync"
@@ -107,6 +108,7 @@ type AmfUe struct {
 	RoutingIndicator                  string
 	AuthenticationCtx                 *models.UeAuthenticationCtx
 	AuthFailureCauseSynchFailureTimes int
+	IdentityRequestSendTimes          int
 	ABBA                              []uint8
 	Kseaf                             string
 	Kamf                              string
@@ -290,8 +292,15 @@ func (ue *AmfUe) DetachRanUe(anType models.AccessType) {
 }
 
 func (ue *AmfUe) AttachRanUe(ranUe *RanUe) {
+	if oldRanUe := ue.RanUe[ranUe.Ran.AnType]; oldRanUe != nil {
+		oldRanUe.Log.Infof("Implicit Deregistration - RanUeNgapID[%d]", oldRanUe.RanUeNgapId)
+		oldRanUe.DetachAmfUe()
+		// TODO: stop Implicit Deregistration timer
+	}
 	ue.RanUe[ranUe.Ran.AnType] = ranUe
 	ranUe.AmfUe = ue
+	ue.NASLog = logger.NasLog.WithField(logger.FieldAmfUeNgapID, fmt.Sprintf("AMF_UE_NGAP_ID:%d", ranUe.AmfUeNgapId))
+	ue.GmmLog = logger.GmmLog.WithField(logger.FieldAmfUeNgapID, fmt.Sprintf("AMF_UE_NGAP_ID:%d", ranUe.AmfUeNgapId))
 }
 
 func (ue *AmfUe) GetAnType() models.AccessType {
@@ -530,11 +539,16 @@ func (ue *AmfUe) ClearRegistrationRequestData(accessType models.AccessType) {
 	ue.RegistrationType5GS = 0
 	ue.IdentityTypeUsedForRegistration = 0
 	ue.AuthFailureCauseSynchFailureTimes = 0
+	ue.IdentityRequestSendTimes = 0
 	ue.ServingAmfChanged = false
 	ue.RegistrationAcceptForNon3GPPAccess = nil
-	ue.RanUe[accessType].UeContextRequest = false
+	if ranUe := ue.RanUe[accessType]; ranUe != nil {
+		ranUe.UeContextRequest = false
+	}
 	ue.RetransmissionOfInitialNASMsg = false
-	ue.onGoing[accessType].Procedure = OnGoingProcedureNothing
+	if onGoing := ue.onGoing[accessType]; onGoing != nil {
+		onGoing.Procedure = OnGoingProcedureNothing
+	}
 }
 
 func (ue *AmfUe) SetOnGoing(anType models.AccessType, onGoing *OnGoing) {

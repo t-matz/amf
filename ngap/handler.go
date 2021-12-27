@@ -455,7 +455,7 @@ func HandleUEContextReleaseComplete(ran *context.AmfRan, message *ngapType.NGAPP
 				Value: ngapType.CauseRadioNetworkPresentUnknownLocalUENGAPID,
 			},
 		}
-		ngap_message.SendErrorIndication(ran, nil, nil, &cause, nil)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, &cause, nil)
 		return
 	}
 
@@ -533,12 +533,14 @@ func HandleUEContextReleaseComplete(ran *context.AmfRan, message *ngapType.NGAPP
 	}
 	if amfUe.State[ran.AnType].Is(context.Registered) {
 		ranUe.Log.Info("Rel Ue Context in GMM-Registered")
-		if pDUSessionResourceList != nil {
+		if cause.NgapCause != nil && pDUSessionResourceList != nil {
 			for _, pduSessionReourceItem := range pDUSessionResourceList.List {
 				pduSessionID := int32(pduSessionReourceItem.PDUSessionID.Value)
 				smContext, ok := amfUe.SmContextFindByPDUSessionID(pduSessionID)
 				if !ok {
 					ranUe.Log.Errorf("SmContext[PDU Session ID:%d] not found", pduSessionID)
+					// TODO: Check if doing error handling here
+					continue
 				}
 				response, _, _, err := consumer.SendUpdateSmContextDeactivateUpCnxState(amfUe, smContext, cause)
 				if err != nil {
@@ -551,7 +553,7 @@ func HandleUEContextReleaseComplete(ran *context.AmfRan, message *ngapType.NGAPP
 	}
 
 	// Remove UE N2 Connection
-	amfUe.ReleaseCause[ran.AnType] = nil
+	delete(amfUe.ReleaseCause, ran.AnType)
 	switch ranUe.ReleaseAction {
 	case context.UeContextN2NormalRelease:
 		ran.Log.Infof("Release UE[%s] Context : N2 Connection Release", amfUe.Supi)
@@ -668,6 +670,7 @@ func HandlePDUSessionResourceReleaseResponse(ran *context.AmfRan, message *ngapT
 			smContext, ok := amfUe.SmContextFindByPDUSessionID(pduSessionID)
 			if !ok {
 				ranUe.Log.Errorf("SmContext[PDU Session ID:%d] not found", pduSessionID)
+				continue
 			}
 			_, responseErr, problemDetail, err := consumer.SendUpdateSmContextN2Info(amfUe, smContext,
 				models.N2SmInfoType_PDU_RES_REL_RSP, transfer)
@@ -906,7 +909,7 @@ func HandleInitialUEMessage(ran *context.AmfRan, message *ngapType.NGAPPDU) {
 		procedureCriticality := ngapType.CriticalityPresentIgnore
 		criticalityDiagnostics := buildCriticalityDiagnostics(&procedureCode, &triggeringMessage, &procedureCriticality,
 			&iesCriticalityDiagnostics)
-		ngap_message.SendErrorIndication(ran, nil, nil, nil, &criticalityDiagnostics)
+		ngap_message.SendErrorIndication(ran, nil, rANUENGAPID, nil, &criticalityDiagnostics)
 	}
 
 	ranUe := ran.RanUeFindByRanUeNgapID(rANUENGAPID.Value)
@@ -935,9 +938,7 @@ func HandleInitialUEMessage(ran *context.AmfRan, message *ngapType.NGAPPDU) {
 			// 5G-GUTI := <GUAMI><5G-TMSI>
 			tmpReginID, _, _ := ngapConvert.AmfIdToNgap(servedGuami.AmfId)
 			amfID := ngapConvert.AmfIdToModels(tmpReginID, fiveGSTMSI.AMFSetID.Value, fiveGSTMSI.AMFPointer.Value)
-
 			tmsi := hex.EncodeToString(fiveGSTMSI.FiveGTMSI.Value)
-
 			guti := servedGuami.PlmnId.Mcc + servedGuami.PlmnId.Mnc + amfID + tmsi
 
 			// TODO: invoke Namf_Communication_UEContextTransfer if serving AMF has changed since
@@ -948,13 +949,6 @@ func HandleInitialUEMessage(ran *context.AmfRan, message *ngapType.NGAPPDU) {
 				ranUe.Log.Warnf("Unknown UE [GUTI: %s]", guti)
 			} else {
 				ranUe.Log.Tracef("find AmfUe [GUTI: %s]", guti)
-
-				if amfUe.CmConnect(ran.AnType) {
-					ranUe.Log.Debug("Implicit Deregistration")
-					ranUe.Log.Tracef("RanUeNgapID[%d]", amfUe.RanUe[ran.AnType].RanUeNgapId)
-					amfUe.DetachRanUe(ran.AnType)
-				}
-				// TODO: stop Implicit Deregistration timer
 				ranUe.Log.Debugf("AmfUe Attach RanUe [RanUeNgapID: %d]", ranUe.RanUeNgapId)
 				amfUe.AttachRanUe(ranUe)
 			}
@@ -1367,7 +1361,8 @@ func HandlePDUSessionResourceNotify(ran *context.AmfRan, message *ngapType.NGAPP
 					if n1Msg != nil {
 						pduSessionId := uint8(pduSessionID)
 						nasPdu, err =
-							gmm_message.BuildDLNASTransport(amfUe, nasMessage.PayloadContainerTypeN1SMInfo, n1Msg, pduSessionId, nil, nil, 0)
+							gmm_message.BuildDLNASTransport(amfUe, ran.AnType, nasMessage.PayloadContainerTypeN1SMInfo,
+								n1Msg, pduSessionId, nil, nil, 0)
 						if err != nil {
 							ranUe.Log.Warnf("GMM Message build DL NAS Transport filaed: %v", err)
 						}
@@ -1421,8 +1416,8 @@ func HandlePDUSessionResourceNotify(ran *context.AmfRan, message *ngapType.NGAPP
 						var nasPdu []byte
 						if n1Msg != nil {
 							pduSessionId := uint8(pduSessionID)
-							nasPdu, err = gmm_message.BuildDLNASTransport(
-								amfUe, nasMessage.PayloadContainerTypeN1SMInfo, n1Msg, pduSessionId, nil, nil, 0)
+							nasPdu, err = gmm_message.BuildDLNASTransport(amfUe, ran.AnType,
+								nasMessage.PayloadContainerTypeN1SMInfo, n1Msg, pduSessionId, nil, nil, 0)
 							if err != nil {
 								ranUe.Log.Warnf("GMM Message build DL NAS Transport filaed: %v", err)
 							}
@@ -1536,7 +1531,7 @@ func HandlePDUSessionResourceModifyIndication(ran *context.AmfRan, message *ngap
 		procedureCriticality := ngapType.CriticalityPresentReject
 		criticalityDiagnostics := buildCriticalityDiagnostics(&procedureCode, &triggeringMessage, &procedureCriticality,
 			&iesCriticalityDiagnostics)
-		ngap_message.SendErrorIndication(ran, nil, nil, nil, &criticalityDiagnostics)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, nil, &criticalityDiagnostics)
 		return
 	}
 
@@ -1549,7 +1544,7 @@ func HandlePDUSessionResourceModifyIndication(ran *context.AmfRan, message *ngap
 				Value: ngapType.CauseRadioNetworkPresentUnknownLocalUENGAPID,
 			},
 		}
-		ngap_message.SendErrorIndication(ran, nil, nil, &cause, nil)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, &cause, nil)
 		return
 	}
 
@@ -1895,7 +1890,7 @@ func HandleUEContextReleaseRequest(ran *context.AmfRan, message *ngapType.NGAPPD
 				Value: ngapType.CauseRadioNetworkPresentUnknownLocalUENGAPID,
 			},
 		}
-		ngap_message.SendErrorIndication(ran, nil, nil, cause, nil)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, cause, nil)
 		return
 	}
 
@@ -1923,6 +1918,8 @@ func HandleUEContextReleaseRequest(ran *context.AmfRan, message *ngapType.NGAPPD
 					smContext, ok := amfUe.SmContextFindByPDUSessionID(pduSessionID)
 					if !ok {
 						ranUe.Log.Errorf("SmContext[PDU Session ID:%d] not found", pduSessionID)
+						// TODO: Check if doing error handling here
+						continue
 					}
 					response, _, _, err := consumer.SendUpdateSmContextDeactivateUpCnxState(amfUe, smContext, causeAll)
 					if err != nil {
@@ -2270,7 +2267,7 @@ func HandleHandoverNotify(ran *context.AmfRan, message *ngapType.NGAPPDU) {
 				Value: ngapType.CauseRadioNetworkPresentUnknownLocalUENGAPID,
 			},
 		}
-		ngap_message.SendErrorIndication(ran, nil, nil, &cause, nil)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, &cause, nil)
 		return
 	}
 
@@ -2569,7 +2566,7 @@ func HandleHandoverRequestAcknowledge(ran *context.AmfRan, message *ngapType.NGA
 		procedureCriticality := ngapType.CriticalityPresentReject
 		criticalityDiagnostics := buildCriticalityDiagnostics(&procedureCode, &triggeringMessage,
 			&procedureCriticality, &iesCriticalityDiagnostics)
-		ngap_message.SendErrorIndication(ran, nil, nil, nil, &criticalityDiagnostics)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, nil, &criticalityDiagnostics)
 	}
 
 	if criticalityDiagnostics != nil {
@@ -2730,7 +2727,7 @@ func HandleHandoverFailure(ran *context.AmfRan, message *ngapType.NGAPPDU) {
 				Value: ngapType.CauseRadioNetworkPresentUnknownLocalUENGAPID,
 			},
 		}
-		ngap_message.SendErrorIndication(ran, nil, nil, &cause, nil)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, nil, &cause, nil)
 		return
 	}
 
@@ -2865,7 +2862,7 @@ func HandleHandoverRequired(ran *context.AmfRan, message *ngapType.NGAPPDU) {
 		procedureCriticality := ngapType.CriticalityPresentReject
 		criticalityDiagnostics := buildCriticalityDiagnostics(&procedureCode, &triggeringMessage,
 			&procedureCriticality, &iesCriticalityDiagnostics)
-		ngap_message.SendErrorIndication(ran, nil, nil, nil, &criticalityDiagnostics)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, nil, &criticalityDiagnostics)
 		return
 	}
 
@@ -2878,7 +2875,7 @@ func HandleHandoverRequired(ran *context.AmfRan, message *ngapType.NGAPPDU) {
 				Value: ngapType.CauseRadioNetworkPresentUnknownLocalUENGAPID,
 			},
 		}
-		ngap_message.SendErrorIndication(ran, nil, nil, &cause, nil)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, &cause, nil)
 		return
 	}
 	amfUe := sourceUe.AmfUe
@@ -3021,7 +3018,7 @@ func HandleHandoverCancel(ran *context.AmfRan, message *ngapType.NGAPPDU) {
 				Value: ngapType.CauseRadioNetworkPresentUnknownLocalUENGAPID,
 			},
 		}
-		ngap_message.SendErrorIndication(ran, nil, nil, &cause, nil)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, &cause, nil)
 		return
 	}
 
@@ -3930,7 +3927,7 @@ func HandleCellTrafficTrace(ran *context.AmfRan, message *ngapType.NGAPPDU) {
 		procedureCriticality := ngapType.CriticalityPresentIgnore
 		criticalityDiagnostics := buildCriticalityDiagnostics(&procedureCode, &triggeringMessage, &procedureCriticality,
 			&iesCriticalityDiagnostics)
-		ngap_message.SendErrorIndication(ran, nil, nil, nil, &criticalityDiagnostics)
+		ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, nil, &criticalityDiagnostics)
 		return
 	}
 
@@ -3944,7 +3941,7 @@ func HandleCellTrafficTrace(ran *context.AmfRan, message *ngapType.NGAPPDU) {
 					Value: ngapType.CauseRadioNetworkPresentUnknownLocalUENGAPID,
 				},
 			}
-			ngap_message.SendErrorIndication(ran, nil, nil, &cause, nil)
+			ngap_message.SendErrorIndication(ran, aMFUENGAPID, rANUENGAPID, &cause, nil)
 			return
 		}
 	}
