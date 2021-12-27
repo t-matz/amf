@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"os"
 	"time"
 
 	"github.com/coreswitch/cmd"
@@ -18,7 +19,8 @@ import (
 )
 
 const (
-	cfgServerURL         = ":2650"
+	// cfgServerURL         = ":2650"
+	cfgServerURL         = os.Getenv("CFG_SERVER_URL")
 	cfgConnRetryInterval = 5
 )
 
