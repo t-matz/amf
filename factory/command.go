@@ -1,5 +1,3 @@
-// +build cfgmgr
-
 package factory
 
 import (
