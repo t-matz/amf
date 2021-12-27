@@ -18,13 +18,13 @@ import (
 
 const (
 	// cfgServerURL         = ":2650"
-	cfgServerURL         = os.Getenv("CFG_SERVER_URL")
 	cfgConnRetryInterval = 5
 )
 
 var (
-	lis net.Listener
-	ch  chan interface{}
+	cfgServerURL = os.Getenv("CFG_SERVER_URL")
+	lis          net.Listener
+	ch           chan interface{}
 )
 
 // Register amf with cli port 2701
